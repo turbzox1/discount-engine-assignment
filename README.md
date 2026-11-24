@@ -1,87 +1,38 @@
-# Opptra Discount Engine — Base Implementation
+# Opptra Discount Engine — FDE Intern Assignment
 
-This is the base implementation for the Opptra FDE Intern assignment.
-Fork this repo, complete the tasks in the assignment brief, and submit your GitHub link + Loom.
+**Live Deployment:** https://turbzox1.github.io/discount-engine-assignment/
 
-## Running locally
+Customer-facing cart pricing engine supporting CSV uploads, **cart-level threshold offers**, **natural language rule creation (LLM-parsed with confirmation)**, and **PDF cart uploads**.
 
-```bash
-npm install
-npm run dev
-```
+## Run Locally (< 3 Steps)
 
-Open http://localhost:5173
+1. Clone and install dependencies:
 
-## Deploying
+   ```bash
+   git clone https://github.com/turbzox1/discount-engine-assignment
+   cd discount-engine-assignment && npm install
+   ```
 
-```bash
-npm run build
-```
+2. Start the dev server and open `http://localhost:5173`:
 
-Deploy the `dist/` folder to Vercel, Netlify, or any static host.
-The live deployment URL must be in your README before submission.
+   ```bash
+   npm run dev
+   ```
 
-## How to use
+*(Optional: set `VITE_LLM_API_KEY` in a `.env` file, or paste an OpenAI-compatible API key directly in the UI's session-only field to test Natural Language Rule Input.)*
 
-1. Upload `sample-data/rules.csv` as the discount rules input
-2. Upload `sample-data/cart.csv` as the cart input
-3. Click **Calculate Discounts**
+## Architecture (Decoupled Input Adapters)
 
-## Project structure
+The core pricing engine (`src/engine/discountEngine.js`) has zero dependency on CSV, PDF, or LLM inputs. Every input path adapts to the engine's `DiscountRule` and `CartItem` schemas:
 
-```
-src/
-  engine/
-    discountEngine.js   ← pure discount logic (no UI)
-    csvParser.js        ← CSV → typed objects
-  components/
-    CsvUploader.jsx     ← file upload area
-    DataTable.jsx       ← reusable table
-    ErrorBanner.jsx     ← parse error display
-  App.jsx               ← main UI + state
-  main.jsx              ← entry point
+* **CSV Upload (`src/engine/csvParser.js`)** — Parses `rules.csv` (including `scope="cart"` and `min_cart_value`) and `cart.csv`.
+* **Natural Language Rule Input (`src/parsers/nlRuleParser.js` + `src/components/NaturalLanguageRuleInput.jsx`)** — Sends plain English to an LLM with strict JSON output, runs deterministic validation (`validateParsedRule`), and requires user Confirm/Discard before adding the rule and re-running the cart.
+* **PDF Cart Upload (`src/parsers/pdfCartParser.js` + `src/components/PdfCartUpload.jsx`)** — Extracts `Product | Brand | Platform | Base Price` tables client-side via `pdfjs-dist` coordinate clustering, replaces the cart, and re-runs automatically.
 
-sample-data/
-  rules.csv             ← sample discount rules
-  cart.csv              ← sample cart items
-```
+## Design Decisions & Tradeoffs
 
-## CSV formats
-
-**rules.csv**
-
-| Column     | Type              | Example          |
-|------------|-------------------|------------------|
-| rule_id    | string            | RULE-01          |
-| scope      | brand \| platform | platform         |
-| applies_to | string            | Amazon India     |
-| type       | percentage \| flat| percentage       |
-| value      | number            | 15               |
-| stackable  | true \| false     | false            |
-
-**cart.csv**
-
-| Column     | Type   | Example      |
-|------------|--------|--------------|
-| item_id    | string | ITEM-01      |
-| product    | string | Cushion Cover|
-| brand      | string | Natura Casa  |
-| platform   | string | Amazon India |
-| base_price | number | 1299         |
-
-## Discount logic
-
-- When multiple non-stackable rules match an item, the one giving the **largest saving in rupees** is applied.
-- Rules marked `stackable: true` apply **on top of** the winning non-stackable rule.
-- If no rules match, the base price is returned with a "No offers available" note.
-
-## Expected results for the sample data
-
-| Item    | Base Price | Final Price | Reasoning                              |
-|---------|-----------|-------------|----------------------------------------|
-| ITEM-01 | Rs.1,299  | Rs.1,104    | Platform offer: 15% off (beats Rs.150) |
-| ITEM-02 | Rs.849    | Rs.629      | Brand offer: Rs.150 off + Platform 10% |
-| ITEM-03 | Rs.599    | Rs.509      | Platform offer: 15% off                |
-| ITEM-04 | Rs.2,499  | Rs.2,499    | No offers available                    |
-| ITEM-05 | Rs.449    | Rs.382      | Platform offer: 15% off                |
-| ITEM-06 | Rs.899    | Rs.809      | Platform offer: 10% off                |
+* **Client-side PDF parsing (`pdfjs-dist`) vs. backend:** Keeps the app 100% static (deployed via GitHub Pages with zero server maintenance) and keeps uploaded cart PDFs in-browser. *Tradeoff:* Works cleanly on text-based tabular PDFs (matching the assignment invoice format) but does not OCR scanned image-only PDFs; a serverless OCR/vision endpoint can drop in behind `parseCartPdfFile` without touching the engine or UI.
+* **Malformed PDF rows:** Invalid rows (missing columns or unparseable prices) are skipped and surfaced in a warning banner while valid rows load cleanly. If zero valid rows are extracted, the existing cart is preserved untouched.
+* **LLM validation & ambiguous inputs:** LLM output is never trusted blindly—`validateParsedRule` enforces valid scopes (`brand | platform | cart`), positive numeric bounds (`1–100%` for percentage), non-empty targets, and required `minCartValue` for cart rules. Ambiguous inputs (e.g. *"Give a discount for big orders"*) return a structured error with a concrete example instead of guessing or crashing.
+* **Cart-level threshold boundary:** Cart offers evaluate strictly against the post-item-discount subtotal (`subtotal >= minCartValue`). When below threshold (e.g. `Rs.3,999 < Rs.4,000`), the cart offer row is omitted completely per spec.
+* **Base repo bugfix:** Fixed a typo in base `src/App.jsx` (`setCartErr` → `setCartErrors`) so cart CSV validation errors render properly.
